@@ -4,6 +4,7 @@ import * as T from 'three';
 import { state as s } from './state.js';
 import { resetBots } from './bots.js';
 import { Weapon } from './weapons.js';
+import { radio } from './radio.js';
 import { sound } from './audio.js';
 export function initBomb() {
   const g=new T.Group(),caseMat=new T.MeshStandardMaterial( {
@@ -26,6 +27,8 @@ export function initBomb() {
   led.position.set(0,.37,0);
   g.add(led);
   s.scene.add(g);
+  const beacon=new T.PointLight(0xff6b45,0,7,2);beacon.position.y=.65;g.add(beacon);
+  s.bomb.beacon=beacon;s.bomb.led=led;
   s.bomb.mesh=g;
 }
 export function newRound() {
@@ -48,21 +51,27 @@ export function newRound() {
   if(wasDead) {
     s.primary=null;
     s.player.armor=0;
-    s.grenades=0;
+    s.grenades=s.smokes=s.flashes=0;
+    p.helmet=p.kit=false;
     s.slot='pistol';
   }
   s.weapons.pistol=new Weapon('pistol');
   if(s.primary)s.weapons[s.primary]=new Weapon(s.primary);
   s.slot=s.primary?'primary':'pistol';
+  s.plan.site=(s.round+1)%2;
+  s.plan.executeAt=s.time+20;s.plan.retakeCalled=false;s.plan.retakeAt=0;
+  p.roundKills=p.roundObjective=0;p.blind=0;
   resetBots();
+  radio(s.bots[0],s.round===1?'Pistol hold — 2-1-2. Watch both sites.':'Full buy — 2-1-2 hold. Trade your partner.');
   Object.assign(s.bomb, {
-    planted:false,site:0,fuse:30,progress:0,defuse:0,carrier:s.bots[2],beep:0
+    planted:false,site:0,fuse:30,progress:0,defuse:0,carrier:s.bots[4],beep:0
   });
   s.bomb.pos.set(0,0,-18);
   s.bomb.mesh.visible=false;
   s.heat=0;
   s.input.scope=false;
   s.hit=s.hurt=s.shake=s.white=0;
+  for(const cloud of s.fx.smokes){cloud.left=0;cloud.group.visible=false;}
   for(const f of s.fx.grenades) {
     f.left=0;
     f.mesh.visible=false;
@@ -75,6 +84,9 @@ export function restart() {
   s.round=1;
   s.primary=null;
   s.grenades=0;
+  for(const a of s.actors){a.kills=a.deaths=a.plants=a.defuses=0;a.money=800;a.weapon='pistol';a.alive=false;}
+  s.radio.length=0;
+  s.smokes=s.flashes=0;
   s.player.alive=false;
   s.feed.length=0;
   newRound();
@@ -89,12 +101,19 @@ export function win(team,reason) {
   s.loss[team]=0;
   s.loss[1-team]++;
   const objective=reason==='CHARGE DEFUSED'||reason==='CHARGE DETONATED';
-  s.money=Math.min(16000,s.money+(team===0?(objective?1600:1400):900+Math.min(500,s.loss[0]*100)));
+  const reward=t=>t===team?(objective?3500:3250):Math.min(3400,1400+500*Math.max(0,s.loss[t]-1));
+  s.money=Math.min(16000,s.money+reward(0));
+  let best=s.actors.find(a=>a.team===team);
+  for(const a of s.actors){if(a!==s.player)a.money=Math.min(16000,a.money+reward(a.team));if(a.team===team&&a.roundKills*3+a.roundObjective*4>best.roundKills*3+best.roundObjective*4)best=a;}
+  s.mvp=`MVP ${best.name} · ${best.roundKills} eliminations${best.roundObjective?' · objective secured':''}`;
   s.buy=false;
   sound(team===0?'win':'lose');
 }
 export function plant(site) {
   const b=s.bomb;
+  if(b.carrier){b.carrier.plants++;b.carrier.roundObjective++;}
+  radio(b.carrier||s.bots[4],`Charge planted at ${s.world.sites[site].name}. Hold crossfire.`);
+  s.plan.retakeAt=s.time+3;
   b.planted=true;
   b.site=site;
   b.pos.set(s.world.sites[site].x,0,s.world.sites[site].z);
@@ -124,7 +143,7 @@ export function roundsStep(dt) {
   }
   if(s.phase==='end') {
     if(s.phaseLeft<=0) {
-      if(Math.max(...s.score)>=5) {
+      if(Math.max(...s.score)>=7) {
         s.phase='match';
         if(document.pointerLockElement)document.exitPointerLock();
       }
@@ -168,7 +187,10 @@ export function roundsStep(dt) {
     const playerDefuse=s.player.alive&&s.input.keys.has('KeyE')&&s.player.pos.distanceTo(b.pos)<2.4;
     if(playerDefuse||defuser) {
       b.defuse+=dt;
-      if(b.defuse>=5) {
+      const actor=playerDefuse?s.player:defuser;
+      b.defuseTime=actor.kit?2.5:5;
+      if(b.defuse>=b.defuseTime) {
+        actor.defuses++;actor.roundObjective++;
         win(0,'CHARGE DEFUSED');
         return;
       }

@@ -4,14 +4,17 @@ import * as T from 'three';
 import { state as s,actor } from './state.js';
 import { P } from './palette.js';
 import { route } from './world.js';
+import { launchGrenade } from './effects.js';
+import { radio,zone } from './radio.js';
+import { DEFS } from './weapons.js';
 import { move } from './mover.js';
 import { sight,botFire } from './combat.js';
 const goal=new T.Vector3();
 export function initBots() {
-  for(let i=0;i<5;i++) {
-    const team=i<2?0:1,b=actor(['MICA','ROOK','CINDER','FLINT','ASH'][i],team,0,0);
+  for(let i=0;i<9;i++) {
+    const team=i<4?0:1,b=actor(['MICA','ROOK','VALE','SLATE','CINDER','FLINT','ASH','WISP','EMBER'][i],team,0,0);
     Object.assign(b, {
-      index:i,group:new T.Group(),hitMeshes:[],mode:'ADVANCE',path:[],pathAt:0,target:null,seen:0,reaction:.35+s.random()*.25,cooldown:0,burst:0,decision:0,site:i===4?1:0,muzzle:0,walk:0
+      index:i,role:['anchor A','anchor B','support','support','carrier','entry','support','entry','lurk'][i],group:new T.Group(),hitMeshes:[],mode:'ADVANCE',path:[],pathAt:0,target:null,seen:0,reaction:.35+s.random()*.25,cooldown:0,burst:0,decision:0,site:i===4?1:0,muzzle:0,walk:0
     });
     const suit=new T.MeshStandardMaterial( {
       color:team?0x5d5141:0x294750,roughness:.85
@@ -61,11 +64,22 @@ export function initBots() {
 }
 export function resetBots() {
   for(const b of s.bots) {
-    b.pos.set(b.team?(b.index-3)*2: (b.index===0?-9:11),0,b.team?-18:15);
+    const dead=!b.alive;
+    b.pos.set(b.team?(b.index-6)*1.3: [-11,11,-3,4][b.index],0,b.team?-18.3:15.5);
+    if(dead){b.weapon='pistol';b.helmet=false;b.kit=false;b.armor=0;}
+    b.smokes=0;b.flashes=0;
+    if(b.team&&b.role==='support'&&b.money>=300){b.smokes=1;b.money-=300;}
+    if(b.money>=2100&&(b.weapon==='pistol'||b.weapon==='smg')){b.weapon=b.role==='lurk'?'marks':'rifle';const price=DEFS[b.weapon].price;if(b.money>=price)b.money-=price;else b.weapon='rifle',b.money-=2100;}
+    else if(b.money>=900&&b.weapon==='pistol'){b.weapon='smg';b.money-=900;}
+    if(b.money>=650&&b.armor<60){b.armor=100;b.money-=650;}
+    if(b.money>=350&&!b.helmet){b.helmet=true;b.money-=350;}
+    if(!b.team&&b.money>=400&&!b.kit){b.kit=true;b.money-=400;}
+    if(!b.team&&b.money>=250){b.flashes=1;b.money-=250;}
+    b.roundKills=b.roundObjective=0;b.blind=0;b.supportUntil=0;b.callAt=0;b.lurkStage=0;b.retakeAnnounced=false;
     b.vel.set(0,0,0);
     b.alive=true;
     b.hp=100;
-    b.armor=0;
+
     b.death=0;
     b.group.visible=true;
     b.group.rotation.set(0,0,0);
@@ -77,7 +91,7 @@ export function resetBots() {
     b.seen=0;
     b.decision=0;
     b.cooldown=0;
-    b.site=b.team?(s.round%2?(b.index===4?1:0):(b.index===2?0:1)):b.index;
+    b.site=b.team?s.plan.site:b.index%2;
     b.reaction=.35+s.random()*.25;
   }
 }
@@ -107,6 +121,62 @@ function travel(b,dt) {
     if(b.pathAt>=b.path.length)b.mode='HOLD';
   }
 }
+function order(b,x,z,mode) {
+  if(b.mode!==mode||Math.hypot(b.goalX-x,b.goalZ-z)>.8||!b.path.length)navigate(b,x,z,mode);
+}
+function chooseTactic(b) {
+  const bomb=s.bomb,site=s.world.sites[b.site];
+  if(bomb.planted){
+    if(b.team===0){
+      if(!s.plan.retakeCalled){radio(b,`Retaking ${s.world.sites[bomb.site].name} together. Kit forward.`);s.plan.retakeCalled=true;}
+      let defuser=null,best=Infinity;
+      for(const a of s.bots)if(a.alive&&!a.team){const cost=a.pos.distanceToSquared(bomb.pos)+(a.kit?0:100);if(cost<best){best=cost;defuser=a;}}
+      if(s.time<s.plan.retakeAt&&b.pos.distanceTo(bomb.pos)>5){
+        order(b,bomb.pos.x+(bomb.site? -5:5),bomb.pos.z+6,'REGROUP');return;
+      }
+      if(b===defuser){if(b.pos.distanceTo(bomb.pos)<1.9)b.mode='DEFUSE';else order(b,bomb.pos.x,bomb.pos.z,'ROTATE');}
+      else {
+        // Cover a distinct angle rather than stacking on the defuser.
+        const x=bomb.pos.x+(b.index%2?2.7:-2.7),z=bomb.pos.z+3;
+        if(Math.hypot(b.pos.x-x,b.pos.z-z)<.8){b.mode='HOLD';b.yaw=bomb.site?Math.PI/2:-Math.PI/2;}
+        else order(b,x,z,'COVER');
+      }
+    }
+    else {
+      const x=bomb.pos.x+(b.index%2?3:-3),z=bomb.pos.z+(b.index%3===0?-3:3);
+      if(Math.hypot(b.pos.x-x,b.pos.z-z)<.8){b.mode='HOLD';b.yaw=b.index%2?0:Math.PI;}
+      else order(b,x,z,'POSTPLANT');
+    }
+    return;
+  }
+  if(b.supportUntil>s.time&&b!==bomb.carrier){order(b,b.supportX,b.supportZ,'SUPPORT');return;}
+  if(b.team){
+    if(!bomb.carrier){
+      if(b.pos.distanceTo(bomb.pos)<1.8){bomb.carrier=b;bomb.mesh.visible=false;b.site=s.plan.site;}
+      else {order(b,bomb.pos.x,bomb.pos.z,'RECOVER');return;}
+    }
+    if(b.role==='lurk'&&b.lurkStage===0){
+      const far=s.world.sites[1-s.plan.site];
+      if(Math.hypot(b.pos.x-far.x,b.pos.z-10)<2)b.lurkStage=1;
+      else {order(b,far.x,10,'FLANK');return;}
+    }
+    // Stage the carrier and escorts; the support throws smoke before entry.
+    if(s.time<s.plan.executeAt){
+      const x=site.x+(b.index-6)*.65,z=site.z-7;
+      order(b,x,z,'STAGE');
+      return;
+    }
+    if(b===bomb.carrier&&Math.hypot(b.pos.x-site.x,b.pos.z-site.z)<2.4)b.mode='PLANT';
+    else order(b,site.x+(b===bomb.carrier?0:(b.index%2?2.5:-2.5)),site.z+(b===bomb.carrier?0:2),'EXECUTE');
+  }
+  else {
+    const x=site.x+(b.index<2?-2.5:2.5),z=site.z+4;
+    if(b.mode==='INVESTIGATE'&&s.time-s.noise.time<4)return;
+    if(s.noise.time>s.time-1.1&&s.noise.team!==b.team&&b.mode==='HOLD')order(b,s.noise.pos.x,s.noise.pos.z,'INVESTIGATE');
+    else if(Math.hypot(b.pos.x-x,b.pos.z-z)>.9)order(b,x,z,'ANCHOR');
+    else {b.mode='HOLD';b.yaw=b.index<2?Math.PI:0;}
+  }
+}
 export function botsStep(dt) {
   for(const b of s.bots) {
     b.flash=Math.max(0,b.flash-dt);
@@ -120,6 +190,10 @@ export function botsStep(dt) {
     if(s.phase!=='live') {
       move(b,0,0,dt);
       continue;
+    }
+    if(b.smokes&&!s.bomb.planted&&s.time>s.plan.executeAt-2){
+      const site=s.world.sites[b.site];goal.set(site.x+(b.site?-4:4),.2,site.z+2);
+      if(launchGrenade(b,'smoke',goal)){b.smokes--;radio(b,`Smoke out. Execute ${site.name}.`);}
     }
     if(b.decision<=0) {
       b.decision=.12+s.random()*.09;
@@ -136,45 +210,27 @@ export function botsStep(dt) {
         b.target=nearest;
         b.seen=0;
       }
-      if(nearest)b.mode='ENGAGE';
-      else if(b.mode==='ENGAGE') {
-        b.mode='INVESTIGATE';
-        navigate(b,s.noise.pos.x,s.noise.pos.z,'INVESTIGATE');
-      }
-      const bomb=s.bomb,site=s.world.sites[b.site];
-      if(!nearest) {
-        if(bomb.planted) {
-          const p=bomb.pos;
-          if(b.team===0) {
-            if(b.mode!=='ROTATE'&&b.mode!=='DEFUSE')navigate(b,p.x,p.z,'ROTATE');
-            if(b.pos.distanceTo(p)<2)b.mode='DEFUSE';
-          }
-          else if(b.pos.distanceTo(p)>7&&b.mode!=='ADVANCE')navigate(b,p.x+(b.index-3)*.5,p.z+1.5,'ADVANCE');
+      if(nearest){
+        b.mode='ENGAGE';
+        if(s.time>b.callAt){
+          let count=0;for(const a of s.actors)if(a.alive&&a.team!==b.team&&a.pos.distanceToSquared(nearest.pos)<64)count++;
+          radio(b,`Contact at ${zone(nearest.pos)} — ${count>1?'two hostiles':'one hostile'}`,nearest.pos);b.callAt=s.time+9;
+          if(!b.team&&b.flashes&&dist<16*16){launchGrenade(b,'flash',nearest.pos);b.flashes--;}
         }
-        else if(b.team===1) {
-          if(!bomb.carrier) {
-            if(b.pos.distanceTo(bomb.pos)<1.8) {
-              bomb.carrier=b;
-              bomb.mesh.visible=false;
-            }
-            else if(b.mode!=='ADVANCE'||Math.hypot(b.goalX-bomb.pos.x,b.goalZ-bomb.pos.z)>1)navigate(b,bomb.pos.x,bomb.pos.z,'ADVANCE');
-          }
-          if(b===bomb.carrier&&Math.hypot(b.pos.x-site.x,b.pos.z-site.z)<2.5)b.mode='PLANT';
-          else if(bomb.carrier&&(!b.path.length||b.mode==='HOLD'&&Math.hypot(b.pos.x-site.x,b.pos.z-site.z)>3))navigate(b,site.x+(b.index-3)*.5,site.z+1,'ADVANCE');
-        }
-        else if(!b.path.length)navigate(b,site.x,site.z+4,'ADVANCE');
-        else if(s.noise.time>s.time-1.1&&s.noise.team!==b.team&&b.mode==='HOLD')navigate(b,s.noise.pos.x,s.noise.pos.z,'INVESTIGATE');
       }
+      else if(b.mode==='ENGAGE')navigate(b,s.noise.pos.x,s.noise.pos.z,'INVESTIGATE');
+      if(!nearest)chooseTactic(b);
+
     }
     if(b.target&&b.target.alive) {
       b.seen+=dt;
       const a=b.target,dx=a.pos.x-b.pos.x,dz=a.pos.z-b.pos.z;
       b.yaw=Math.atan2(-dx,-dz);
       move(b,Math.cos(b.yaw)*Math.sin(s.time*1.8+b.index)*.2,-Math.sin(b.yaw)*Math.sin(s.time*1.8+b.index)*.2,dt);
-      if(b.seen>b.reaction&&b.cooldown<=0&&sight(b,a)) {
-        botFire(b,a,Math.max(.2,1.25-b.seen*.35)+Math.sqrt(dx*dx+dz*dz)*.025);
+      if(b.seen>b.reaction+(b.blind>0?1.4:0)&&b.cooldown<=0&&sight(b,a)) {
+        botFire(b,a,Math.max(.2,1.25-b.seen*.35)+Math.sqrt(dx*dx+dz*dz)*.025+(b.blind>0?2:0));
         b.burst++;
-        b.cooldown=b.burst%3===0?.65:.15;
+        b.cooldown=b.burst%3===0?.65:DEFS[b.weapon].gap;
       }
     }
     else if(b.mode==='PLANT'||b.mode==='DEFUSE') {

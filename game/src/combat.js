@@ -1,6 +1,8 @@
+// World-occluded hitscan, head/body damage and smoke-aware perception.
 import * as T from 'three';
 import { state as s } from './state.js';
 import { DEFS,current,spread } from './weapons.js';
+import { smokeBlocks } from './utility.js';
 import { sound } from './audio.js';
 import { tracer,sparks } from './effects.js';
 const ray=new T.Raycaster(),origin=new T.Vector3(),dir=new T.Vector3(),end=new T.Vector3(),target=new T.Vector3(),hits=[];
@@ -11,6 +13,7 @@ export function sight(a,b) {
   target.y+=b.eye*.85;
   dir.subVectors(target,origin);
   const d=dir.length();
+  if(smokeBlocks(origin,target))return false;
   ray.set(origin,dir.normalize());
   ray.far=d;
   hits.length=0;
@@ -19,6 +22,7 @@ export function sight(a,b) {
 }
 export function damage(a,n,by,head) {
   if(!a.alive||s.phase!=='live')return;
+  if(head&&a.helmet)n*=.5;
   const absorb=Math.min(a.armor,n*.5);
   a.armor-=absorb;
   a.hp=Math.max(0,a.hp-(n-absorb));
@@ -30,6 +34,7 @@ export function damage(a,n,by,head) {
   }
   if(a.hp>0)return;
   a.alive=false;
+  a.deaths++;by.kills++;by.roundKills++;
   a.death=0;
   if(by===s.player&&a.team!==by.team) {
     s.money+=300;
@@ -48,7 +53,7 @@ export function damage(a,n,by,head) {
 }
 export function firePlayer(force=false) {
   const p=s.player,w=current(),d=DEFS[w.id];
-  if(!p.alive||s.phase!=='live'||s.slot==='grenade'||w.reload||w.cooldown)return;
+  if(!p.alive||s.phase!=='live'||['grenade','smoke','flash'].includes(s.slot)||w.reload||w.cooldown)return;
   if(!w.mag) {
     w.cooldown=.22;
     sound('dry');
@@ -65,16 +70,18 @@ export function firePlayer(force=false) {
   s.noise.time=s.time;
   s.noise.team=p.team;
   sound('shot',w.id);
+  const pellets=d.pellets||1;
+  s.scene.updateMatrixWorld(true);
+  for(let pellet=0;pellet<pellets;pellet++){
   origin.copy(s.camera.position);
   s.camera.getWorldDirection(dir);
-  const sp=force?0:spread();
+  const sp=force?0:spread()+(d.pellets?.055:0);
   dir.x+=(s.random()-.5)*sp*2;
   dir.y+=(s.random()-.5)*sp*2;
   dir.z+=(s.random()-.5)*sp*2;
   dir.normalize();
   ray.set(origin,dir);
   ray.far=100;
-  s.scene.updateMatrixWorld(true);
   hits.length=0;
   ray.intersectObjects(s.world.solids,false,hits);
   let nearest=hits[0]?.distance??100,best=null,head=false;
@@ -91,7 +98,8 @@ export function firePlayer(force=false) {
   end.copy(origin).addScaledVector(dir,nearest);
   if(best) {
     s.headKill=false;
-    damage(best,d.damage*(head?(w.id==='marks'?2:3):1),p,head);
+    const falloff=d.pellets?Math.max(.025,1-(nearest/24)**1.2):Math.max(.65,1-nearest/180);
+    damage(best,d.damage*falloff*(head?(w.id==='marks'?2:3):1),p,head);
     s.hit=.16;
     sound(head?'head':'hit');
   }
@@ -100,6 +108,7 @@ export function firePlayer(force=false) {
   origin.x+=.13;
   origin.y-=.1;
   tracer(origin,end);
+  }
 }
 export function botFire(b,a,error) {
   origin.copy(b.pos);
@@ -110,8 +119,8 @@ export function botFire(b,a,error) {
   end.z+=(s.random()-.5)*error*3;
   tracer(origin,end);
   b.muzzle=.08;
-  if(a===s.player)sound('shot','smg');
-  if(s.random()>error*.55)damage(a,21,b,false);
+  if(a===s.player)sound('shot',b.weapon);
+  if(s.random()>error*.55){const head=s.random()<.08;damage(a,DEFS[b.weapon].damage*.65*(head?2:1),b,head);}
   s.noise.pos.copy(b.pos);
   s.noise.time=s.time;
   s.noise.team=b.team;

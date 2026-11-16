@@ -1,5 +1,7 @@
+// Pooled ballistic grenades, tracers, debris and explosion rings.
 import * as T from 'three';
 import { state as s } from './state.js';
+import { smokeAt,flashAt } from './utility.js';
 import { sound } from './audio.js';
 export function initEffects() {
   const f=s.fx;
@@ -66,20 +68,21 @@ export function sparks(pos,red=false) {
     if(++count===7)break;
   }
 }
+export function launchGrenade(owner,type,target=null) {
+  const f=s.fx.grenades.find(f=>f.left<=0);if(!f)return false;
+  f.left=type==='flash'?1.1:1.5;f.owner=owner;f.type=type;f.mesh.visible=true;
+  f.mesh.material.color.setHex(type==='smoke'?0x84b9a2:type==='flash'?0xf3db9b:0x515d4b);
+  f.mesh.position.copy(owner.pos);f.mesh.position.y+=owner.eye;
+  if(target){f.v.subVectors(target,f.mesh.position);f.v.multiplyScalar(1/1.2);f.v.y+=6;}
+  else {s.camera.getWorldDirection(f.v);f.v.multiplyScalar(13);f.v.y+=4;}
+  return true;
+}
 export function throwFrag() {
-  if(s.grenades<=0||s.phase!=='live'||!s.player.alive)return;
-  const f=s.fx.grenades.find(f=>f.left<=0);
-  if(!f)return;
-  s.grenades--;
-  f.left=1.5;
-  f.owner=s.player;
-  f.mesh.visible=true;
-  f.mesh.position.copy(s.camera.position);
-  s.camera.getWorldDirection(f.v);
-  f.v.multiplyScalar(13);
-  f.v.y+=4;
-  s.slot=s.primary?'primary':'pistol';
-  sound('reload');
+  const type=s.slot==='smoke'?'smoke':s.slot==='flash'?'flash':'frag';
+  const key=type==='frag'?'grenades':type==='smoke'?'smokes':'flashes';
+  if(s[key]<=0||s.phase!=='live'||!s.player.alive)return;
+  if(!launchGrenade(s.player,type))return;
+  s[key]--;s.slot=s.primary?'primary':'pistol';sound('reload');
 }
 export function effectsStep(dt,damage) {
   for(const f of s.fx.tracers)if(f.left>0) {
@@ -121,6 +124,8 @@ export function effectsStep(dt,damage) {
     f.mesh.rotation.x+=dt*5;
     if(f.left<=0) {
       f.mesh.visible=false;
+      if(f.type==='smoke'){smokeAt(p);sound('reload');continue;}
+      if(f.type==='flash'){flashAt(p);continue;}
       sound('explode');
       sparks(p);
       const ring=s.fx.rings.find(r=>r.left<=0);

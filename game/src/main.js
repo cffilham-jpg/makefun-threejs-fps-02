@@ -2,6 +2,8 @@
 import * as T from 'three';
 import { state as s } from './state.js';
 import { seeded } from './rng.js';
+import { initUtility,initUtilityRay,utilityStep,smokeAt } from './utility.js';
+import { initSettings } from './settings.js';
 import { P } from './palette.js';
 import { world } from './world.js';
 import { initInput } from './input.js';
@@ -39,10 +41,12 @@ initBots();
 s.actors.push(s.player,...s.bots);
 initBomb();
 initEffects();
+initUtility();initUtilityRay();
 s.weapons.pistol=new Weapon('pistol');
 initView();
 initInput(r.domElement);
 initHud();
+initSettings();
 newRound();
 const focus=new T.Vector3();
 export function syncCamera() {
@@ -86,12 +90,13 @@ export function step(dt) {
   s.white=Math.max(0,s.white-dt*1.8);
   syncCamera();
   if((s.input.fire||s.input.pressed)&&!s.buy&&s.phase==='live') {
-    if(s.slot==='grenade') {
+    if(['grenade','smoke','flash'].includes(s.slot)) {
       if(s.input.pressed)throwFrag();
     }
     else firePlayer();
   }
   s.input.pressed=false;
+  utilityStep(dt);
   botsStep(dt);
   effectsStep(dt,damage);
   roundsStep(dt);
@@ -99,6 +104,7 @@ export function step(dt) {
 }
 function render() {
   botsRender();
+  if(s.bomb.beacon){const pulse=.5+.5*Math.sin(s.time*(s.bomb.fuse<8?16:7));s.bomb.beacon.intensity=s.bomb.planted?2+pulse*5:0;s.bomb.led.scale.setScalar(1+pulse*.2);}
   syncCamera();
   viewRender();
   hudRender();
@@ -125,19 +131,19 @@ function shotSetup(name) {
     s.weapons.rifle=new Weapon('rifle');
     s.slot='primary';
     s.player.pos.set(-9,0,-2.5);
-    const b=s.bots[2];
+    const b=s.bots[4];
     b.pos.set(-17,0,-3);
     b.yaw=Math.atan2(-(s.player.pos.x-b.pos.x),-(s.player.pos.z-b.pos.z));
     b.mode='ENGAGE';
     b.target=s.player;
     b.seen=.6;
     s.bots[3].pos.set(-20,0,-10);
-    s.bots[4].pos.set(16,0,-6);
+    s.bots[6].pos.set(16,0,-6);
     s.bots[0].pos.set(-21,0,3);
     s.bots[1].pos.set(10,0,10);
     s.player.armor=76;
     s.player.hp=87;
-    s.bots[2].hp=100;
+    b.hp=100;
     botsRender();
     aim(b.pos.x,1.2,b.pos.z);
     firePlayer(true);
@@ -145,6 +151,9 @@ function shotSetup(name) {
     s.hit=.15;
     s.spread=.0035;
     s.bomb.carrier=b;
+    s.player.helmet=true;s.player.kit=true;s.smokes=1;s.flashes=1;
+    smokeAt({x:-20,y:0,z:1});utilityStep(.8);
+    s.radio.push({name:'MICA',team:0,text:'Contact at A / Kiln Hall — two hostiles',time:s.time});
   }
   else if(name==='buy') {
     s.buy=true;
@@ -161,6 +170,7 @@ function shotSetup(name) {
     aim(15,1,-6);
     plant(1);
     s.bomb.defuse=5;
+    s.player.defuses++;s.player.roundObjective++;
     win(0,'CHARGE DEFUSED');
     s.phaseLeft=2.8;
   }

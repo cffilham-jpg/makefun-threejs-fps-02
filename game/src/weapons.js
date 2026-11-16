@@ -1,3 +1,4 @@
+// Weapon definitions, finite magazines, requisition and first-person model.
 import * as T from 'three';
 import { state as s } from './state.js';
 import { sound } from './audio.js';
@@ -10,7 +11,7 @@ export const DEFS= {
     name:'Falcon',mag:30,reserve:60,damage:36,gap:.12,reload:2.15,auto:true,price:2100
   },marks: {
     name:'Longbow',mag:5,reserve:20,damage:95,gap:1.2,reload:2.6,auto:false,price:3200
-  }
+  },shotgun:{name:'Mauler-12',mag:6,reserve:24,damage:18,gap:.9,reload:2.7,auto:false,price:1400,pellets:8,range:11},dmr:{name:'Kestrel',mag:18,reserve:54,damage:52,gap:.3,reload:2.3,auto:false,price:2600,range:55}
 };
 export class Weapon {
   constructor(id) {
@@ -43,7 +44,7 @@ export function current() {
 }
 export function switchTo(slot) {
   if(slot==='primary'&&!s.primary)return;
-  if(slot==='grenade'&&!s.grenades)return;
+  if(slot==='grenade'&&!s.grenades||slot==='smoke'&&!s.smokes||slot==='flash'&&!s.flashes)return;
   const w=current();
   if(w)w.reload=0;
   s.slot=slot;
@@ -51,13 +52,15 @@ export function switchTo(slot) {
 }
 export function buy(n) {
   if(s.phase!=='buy')return;
-  const id=['pistol','smg','rifle','marks','frag','armor'][n-1];
-  const price=id==='frag'?300:id==='armor'?650:DEFS[id]?.price;
+  const id=['pistol','smg','rifle','marks','frag','armor','smoke','flash','kit','helmet','shotgun','dmr'][n-1];
+  const price=({frag:300,armor:650,smoke:300,flash:250,kit:400,helmet:350})[id]??DEFS[id]?.price;
   if(price===undefined||s.money<price)return;
   if(id==='frag') {
     if(s.grenades>=2)return;
     s.grenades++;
   }
+  else if(id==='smoke'||id==='flash'){const key=id==='smoke'?'smokes':'flashes';if(s[key]>=1)return;s[key]++;}
+  else if(id==='kit'||id==='helmet'){if(s.player[id])return;s.player[id]=true;}
   else if(id==='armor') {
     if(s.player.armor>=100)return;
     s.player.armor=100;
@@ -123,7 +126,7 @@ export function initView() {
 }
 export function viewRender() {
   const v=s.view,p=s.player,w=current();
-  v.group.visible=p.alive&&s.started&&s.slot!=='grenade'&&!(s.input.scope&&w.id==='marks');
+  v.group.visible=p.alive&&s.started&&!['grenade','smoke','flash'].includes(s.slot)&&!(s.input.scope&&w.id==='marks');
   const pistol=w.id==='pistol';
   v.group.scale.setScalar(pistol?.65:w.id==='smg'?.72:.8);
   v.receiver.scale.z=pistol?.7:1;

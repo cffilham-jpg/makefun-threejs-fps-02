@@ -1,3 +1,4 @@
+// Gesture-unlocked procedural audio, with flash deafening and master gain.
 import { state as s } from './state.js';
 export function unlockAudio() {
   if(!s.audio) {
@@ -12,7 +13,7 @@ export function tone(f=440,t=.08,volume=.08,type='sine',end=f) {
   o.type=type;
   o.frequency.setValueAtTime(f,c.currentTime);
   o.frequency.exponentialRampToValueAtTime(Math.max(20,end),c.currentTime+t);
-  g.gain.setValueAtTime(volume,c.currentTime);
+  g.gain.setValueAtTime(Math.max(.001,volume*s.settings.volume*(s.player.blind>0?.12:1)),c.currentTime);
   g.gain.exponentialRampToValueAtTime(.001,c.currentTime+t);
   o.connect(g);
   g.connect(c.destination);
@@ -22,7 +23,7 @@ export function tone(f=440,t=.08,volume=.08,type='sine',end=f) {
 export function sound(kind,weapon='pistol') {
   if(kind==='shot') {
     const f= {
-      pistol:210,smg:160,rifle:100,marks:65
+      pistol:210,smg:160,rifle:100,marks:65,shotgun:55,dmr:85
     }
     [weapon];
     tone(f,.14,.11,'sawtooth',30);

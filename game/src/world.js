@@ -1,8 +1,18 @@
+// Original depot geometry, lighting, signs and walkable route graph.
 import * as T from 'three';
 import { state as s } from './state.js';
 import { P } from './palette.js';
 export function world() {
   const scene=s.scene,colliders=[],solids=[],map=[];
+  const skyCanvas=document.createElement('canvas');skyCanvas.width=16;skyCanvas.height=128;
+  const skyContext=skyCanvas.getContext('2d'),gradient=skyContext.createLinearGradient(0,0,0,128);
+  gradient.addColorStop(0,'#344956');gradient.addColorStop(.5,'#ad8173');gradient.addColorStop(1,'#e4b984');
+  skyContext.fillStyle=gradient;skyContext.fillRect(0,0,16,128);
+  const sky=new T.Mesh(new T.SphereGeometry(110,24,16),new T.MeshBasicMaterial({map:new T.CanvasTexture(skyCanvas),side:T.BackSide,depthWrite:false,fog:false}));
+  scene.add(sky);
+  const sunDisc=new T.Mesh(new T.SphereGeometry(3,16,12),new T.MeshBasicMaterial({color:0xffd29a,fog:false}));
+  sunDisc.position.set(-65,28,43);scene.add(sunDisc);
+
   const mats= {
   };
   for(const [n,c]of Object.entries(P))mats[n]=new T.MeshStandardMaterial( {
@@ -49,7 +59,7 @@ export function world() {
     a.strokeRect(10,10,492,236);
     a.fillStyle=color;
     a.textAlign='center';
-    a.font='bold 135px sans-serif';
+    a.font=`bold ${text.length>14?30:text.length>5?43:135}px sans-serif`;
     a.fillText(text,256,173);
     const m=new T.Mesh(new T.PlaneGeometry(size*2,size),new T.MeshBasicMaterial( {
       map:new T.CanvasTexture(c),side:T.DoubleSide
@@ -150,8 +160,19 @@ export function world() {
     ring.rotation.x=-Math.PI/2;
     ring.position.set(site.x,.018,site.z);
     scene.add(ring);
-    label(site.name,site.x,3.2,site.z-3.4,2);
+    label(site.name==='A'?'SITE A / KILN HALL':'SITE B / FREIGHT YARD',site.x,3.2,site.z-3.4,2);
     for(let i=0;i<4;i++)box(site.x-2.6+i*1.7,.025,site.z+2.7,.8,.04,.18,'amber',false);
+  }
+  // Utility pipes and striped loading curbs remain outside walking lanes.
+  for(const x of [-23.3,24.5]){
+    for(let i=0;i<3;i++){
+      const pipe=new T.Mesh(new T.CylinderGeometry(.12,.12,16,8),mats.dark);
+      pipe.rotation.x=Math.PI/2;pipe.position.set(x,2.8+i*.3,-2);scene.add(pipe);
+    }
+  }
+  for(let i=0;i<10;i++){
+    const stripe=box(-22+i*.38,.08,6.3,.23,.08,.8,i%2?'dark':'amber',false);
+    stripe.rotation.y=-.45;
   }
   label('MERIDIAN',0,5,-19.65,2.3);
   label('A  /  01',-15,3.7,6.7,1.25);
@@ -177,7 +198,7 @@ export function world() {
     scene.add(l);
   }
   const sun=new T.DirectionalLight(0xffc58c,2.6);
-  sun.position.set(-18,25,12);
+  sun.position.set(-30,14,22);
   sun.castShadow=true;
   sun.shadow.mapSize.set(2048,2048);
   Object.assign(sun.shadow.camera, {
